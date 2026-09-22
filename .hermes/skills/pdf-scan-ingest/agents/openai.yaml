@@ -1,0 +1,3 @@
+interface:
+  display_name: "PDF Scan Ingest"
+  short_description: "OCR scanned Chinese PDFs with provenance and confidence"

@@ -1,0 +1,3 @@
+interface:
+  display_name: "Case Record Structure"
+  short_description: "Build case indexes from verified OCR records"

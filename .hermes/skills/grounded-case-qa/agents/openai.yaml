@@ -1,0 +1,3 @@
+interface:
+  display_name: "Grounded Case Qa"
+  short_description: "Answer case questions with citations and uncertainty"

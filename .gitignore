@@ -1,0 +1,26 @@
+# Case inputs and generated data
+/ocr_output/
+/records/
+/reocrds/
+/case_file.pdf
+/work/
+/evaluation/
+
+# Python environments, installed dependencies and caches
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+
+# Local secrets and system files
+.env
+.env.*
+!.env.example
+.DS_Store
