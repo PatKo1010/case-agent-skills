@@ -94,3 +94,8 @@ def fingerprint(root):
         data = read(root / 'ocr' / f"page-{page['page']:03d}.json")
         source['pages'].append(data)
     return hashlib.sha256(json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()).hexdigest()
+
+
+def output_for(pdf):
+    """Canonical case directory, independent of filename and caller cwd."""
+    return Path(__file__).resolve().parents[4] / ('output_' + sha(pdf))

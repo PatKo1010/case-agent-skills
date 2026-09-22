@@ -7,7 +7,7 @@ description: Required second stage for PDF case questions after pdf-scan-ingest.
 
 ## Stage 2: Build or reuse indexes
 
-The current Hermes agent performs extraction using its current conversation and model. Keep the original question and OCR directory from Stage 1. Display “Stage 2/3: Building or validating case indexes.” All commands below run from the project root.
+The current Hermes agent performs extraction using its current conversation and model. Keep the original question and OCR directory from Stage 1. Display “Stage 2/3: Building or validating case indexes.” All commands below run from the project root. Use the locator's `output_dir` as `OCR_DIR` and `output_dir/records` as `RECORD_DIR`; place drafts there too. A valid existing index skips extraction and goes directly to QA.
 
 1. Validate the input OCR with `.venv/bin/python .hermes/skills/pdf-scan-ingest/scripts/validate_ocr_bundle.py OCR_DIR`.
 2. If an index directory is already associated with this OCR, run:

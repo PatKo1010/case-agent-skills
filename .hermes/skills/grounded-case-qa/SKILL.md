@@ -7,6 +7,8 @@ description: Final stage of PDF case questions. Answer from validated current in
 
 ## Entry gate
 
+For a PDF request, `locate_case.py INPUT.pdf` identifies the canonical project-root `output_<PDF SHA256>/`. When it reports `grounded-case-qa`, reuse its validated OCR/indexes directly; do not rerun the earlier skills. Use that output root as `OCR_DIR`, and its `records/` child as `RECORD_DIR`. A follow-up question uses the same paths, with the validation below repeated before answering.
+
 The current Hermes agent performs retrieval and answering; no separate model process or API call is needed. Keep the user's original question and the current OCR/index directories.
 
 Before substantive answering, run from the project root:

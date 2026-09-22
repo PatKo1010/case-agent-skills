@@ -12,7 +12,7 @@ except ImportError:
 if len(sys.argv) != 3:
     raise SystemExit("usage: render_pdf.py INPUT.pdf OUTPUT_DIR")
 source, out = Path(sys.argv[1]).resolve(), Path(sys.argv[2]).resolve()
-pages = out / "pages"
+pages = out / "page"
 pages.mkdir(parents=True, exist_ok=True)
 rendered = []
 with pymupdf.open(source) as document:

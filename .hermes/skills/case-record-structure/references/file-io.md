@@ -99,10 +99,10 @@ IDs are unique across all arrays. `documents` needs at least one record. The oth
 
 ## Serialize all five outputs
 
-After Hermes finishes the draft, run this writer with a **new** record directory. It uses `json.dumps()` so source newlines/quotes become valid JSONL. Each record occupies one physical line. It refuses an existing directory to protect earlier indexes; when repairing existing files, serialize the corrected records to those explicitly identified files, then revalidate.
+After Hermes finishes the draft, run this writer with the canonical `output_<sha256>/records/` directory. It uses `json.dumps()` so source newlines/quotes become valid JSONL. Each record occupies one physical line. The records directory may already contain your draft. Existing index outputs are preserved by refusing to overwrite them; when rebuilding or repairing, explicitly update the affected records in this same directory and revalidate.
 
 ```bash
-.venv/bin/python - 'RECORD_DRAFT.json' 'NEW_RECORD_DIR' <<'PY'
+.venv/bin/python - 'OUTPUT_DIR/records/draft.json' 'OUTPUT_DIR/records' <<'PY'
 import json
 from pathlib import Path
 import sys
@@ -117,7 +117,10 @@ summary = draft.get('case_summary')
 if not isinstance(summary, str) or not summary.strip():
     raise ValueError('case_summary must be nonempty text')
 root = Path(sys.argv[2])
-root.mkdir(parents=True, exist_ok=False)
+root.mkdir(parents=True, exist_ok=True)
+for name in [*(f'{name}.jsonl' for name in names), 'case_summary.md']:
+    if (root / name).exists():
+        raise FileExistsError(f'Existing index output requires explicit repair: {root / name}')
 for name in names:
     with (root / f'{name}.jsonl').open('w', encoding='utf-8') as stream:
         for record in draft[name]:

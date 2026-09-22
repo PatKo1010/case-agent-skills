@@ -11,7 +11,7 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("pdf", type=Path)
-    parser.add_argument("output", type=Path)
+    parser.add_argument("output", type=Path, nargs="?", help="Optional canonical output_<PDF SHA256> directory")
     models = Path.home() / ".paddlex" / "official_models"
     parser.add_argument("--det-model-dir", type=Path, default=models / "PP-OCRv6_medium_det")
     parser.add_argument("--rec-model-dir", type=Path, default=models / "PP-OCRv6_medium_rec")
@@ -20,6 +20,21 @@ def main():
     args = parser.parse_args()
     if not 0 <= args.uncertain_threshold <= 1:
         parser.error("--uncertain-threshold must be between 0 and 1")
+    from bundle import output_for, validate_bundle
+    canonical = output_for(args.pdf)
+    if args.output is not None and args.output.resolve() != canonical:
+        parser.error(f"Output must be the canonical directory: {canonical}")
+    args.output = canonical
+    if (canonical / 'manifest.json').exists():
+        try:
+            manifest = validate_bundle(canonical)
+            if manifest['source_sha256'] == canonical.name.removeprefix('output_'):
+                print(f"Reusing complete OCR: {canonical}")
+                return
+        except (OSError, ValueError, KeyError, TypeError):
+            pass
+    if (canonical / 'job.json').exists():
+        args.resume = True
     for directory in (args.det_model_dir, args.rec_model_dir):
         for name in ("inference.json", "inference.pdiparams", "inference.yml"):
             if not (directory / name).is_file():
@@ -34,7 +49,7 @@ def run(args, ocr_factory=None):
 
     args.output.mkdir(parents=True, exist_ok=True)
     with lock(args.output / ".ingest.lock"):
-        existing = [p for p in args.output.iterdir() if p.name != ".ingest.lock"]
+        existing = [p for p in args.output.iterdir() if p.name not in (".ingest.lock", "records")]
         if existing and not args.resume:
             raise ValueError("Output is not empty. Use --resume with the same PDF/models/settings.")
         engine = {
@@ -54,12 +69,13 @@ def run(args, ocr_factory=None):
         job_path = args.output / "job.json"
         if existing:
             if not job_path.exists():
-                raise ValueError("Legacy output has no resume metadata; use a new directory once.")
+                raise ValueError("Incomplete output has no resume metadata; preserve it and request an explicit repair/rebuild decision.")
             job = read(job_path)
             if job.get("config") != config:
-                raise ValueError("PDF, model, dependency version or settings changed; use a new directory.")
+                raise ValueError("PDF, model, dependency version or settings changed; restore the original settings or explicitly rebuild this case.")
         else:
             job = {"job_id": str(uuid.uuid4()), "config": config, "pages": {}}
+        (args.output / "records").mkdir(exist_ok=True)
         job.update(status="running", pid=os.getpid(), started_at=time.time(), error=None)
         atomic(job_path, job)
         manifest_path = args.output / "manifest.json"
@@ -73,7 +89,7 @@ def run(args, ocr_factory=None):
             for page in manifest["pages"]:
                 image = (args.output / page["file"]).resolve()
                 if not image.is_relative_to(args.output.resolve()) or sha(image) != page["sha256"]:
-                    raise ValueError("Rendered image changed; use a new output directory.")
+                    raise ValueError("Rendered image changed; repair the image from the original PDF before resuming.")
             manifest.update(ocr_engine=engine, status="in_progress")
             atomic(manifest_path, manifest)
             output = args.output / "ocr"
@@ -96,7 +112,6 @@ def run(args, ocr_factory=None):
             if pending:
                 print(f"Job {job['job_id']}: initializing OCR; {len(pending)} pages pending", flush=True)
                 os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-                os.environ.setdefault("PADDLE_PDX_CACHE_HOME", str(args.output.resolve() / ".paddlex-cache"))
                 if ocr_factory is None:
                     from paddleocr import PaddleOCR
                     ocr_factory = PaddleOCR
