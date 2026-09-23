@@ -6,11 +6,12 @@
 
 | 技能 | 用途 | 主要產出 |
 | --- | --- | --- |
-| [pdf-scan-ingest](.hermes/skills/pdf-scan-ingest/SKILL.md) | 將 PDF 轉為頁面圖片，以 PaddleOCR 辨識文字，保留頁碼、座標、辨識信心與核對狀態；支援中斷續跑。 | `page/` 圖片、`ocr/` 逐頁 JSON、`job.json`、`manifest.json` |
-| [case-record-structure](.hermes/skills/case-record-structure/SKILL.md) | 由 Hermes 將 OCR 整理成文件、人物／組織、事件與證據索引，保留來源引文、頁碼及不確定性，並驗證索引與 OCR 的對應關係。 | `records/` 下的四個 JSONL、`case_summary.md`、`index_manifest.json` |
-| [grounded-case-qa](.hermes/skills/grounded-case-qa/SKILL.md) | 根據有效索引回答案件問題，必要時核對 OCR 與原圖，區分文件記載、矛盾內容與資料不足。 | 附來源頁碼及不確定性說明的回答 |
+| [pdf-scan-ingest](.hermes/skills/pdf-scan-ingest/SKILL.md) | 逐頁 adaptive ingest：優先使用 PyMuPDF native text，文字不足時才 fallback 到 PaddleOCR；保留頁碼、bbox、confidence 與 verification。 | `page/`、`ocr/` normalized page JSON、`job.json`、`manifest.json` |
+| [document-structure](.hermes/skills/document-structure/SKILL.md) | 建立 lightweight document structure：document boundary、page、title，以及 narrative/table/Q&A block。 | `structure/pages.jsonl`、`documents.jsonl`、`blocks.jsonl`、`structure_manifest.json` |
+| [case-record-structure](.hermes/skills/case-record-structure/SKILL.md) | 由 Hermes 讀取已驗證的 document structure，再抽取人物／組織、事件、證據與衝突等案件語意索引。 | `records/` 下的四個 JSONL、`case_summary.md`、`index_manifest.json` |
+| [grounded-case-qa](.hermes/skills/grounded-case-qa/SKILL.md) | 先查 semantic index，以 structure 導航，再回 normalized page / 原圖驗證並回答。 | 附來源頁碼及不確定性說明的回答 |
 
-首次處理依序執行 `pdf-scan-ingest → case-record-structure → grounded-case-qa`。同一份 PDF 已有有效 OCR 與索引時，直接進入 QA；只缺索引時，從結構化開始。
+首次處理依序執行 `pdf-scan-ingest → document-structure → case-record-structure → grounded-case-qa`。每一層都有 validator；有效快取可從最早缺失或過期的 layer 繼續。
 
 ## 環境建立
 
@@ -93,8 +94,9 @@ hermes
 ```text
 output_<64位SHA256>/
 ├── page/                  # 所有 PNG 頁面
-├── ocr/                   # page-001.json 等 OCR 輸出
-├── records/               # 四個 JSONL、摘要、index_manifest.json、抽取草稿
+├── ocr/                   # backward-compatible 名稱；逐頁 normalized native/OCR JSON
+├── structure/             # pages/documents/blocks + structure_manifest
+├── records/               # semantic case index、摘要、index_manifest.json、抽取草稿
 ├── job.json
 └── manifest.json
 ```
@@ -113,9 +115,10 @@ output_<64位SHA256>/
 
 此唯讀工具回傳實際路徑、驗證結果與 `next_skill`：
 
-- OCR、索引皆有效：直接載入 `grounded-case-qa`，不再執行前兩個技能。
-- OCR 有效、索引缺少或過期：只執行 `case-record-structure`，再進 QA。
-- OCR 缺少、不完整或損壞：先執行 `pdf-scan-ingest`，再完成所需階段。
+- ingest、document structure、semantic records 皆有效：直接載入 `grounded-case-qa`。
+- ingest + structure 有效、records 缺少或過期：從 `case-record-structure` 繼續。
+- ingest 有效、structure 缺少或過期：從 `document-structure` 繼續。
+- ingest 缺少、不完整或損壞：從 `pdf-scan-ingest` 開始。
 
 目錄存在不等於可重用；必須核對來源 PDF、OCR 完整性與索引來源指紋。使用者只要求 OCR 或索引時，依該限定範圍停止。專案 `AGENTS.md` 與三個技能已規定這個入口；舊 Hermes 對話請重新載入技能。
 
@@ -127,7 +130,7 @@ output_<64位SHA256>/
 
 自動計算輸出目錄。已有完整有效 OCR 時直接重用，不載入 PaddleOCR 模型；已有 `job.json` 的中斷作業自動續跑，也可明確使用 `--resume`。不同模型或設定的中斷作業會停止，避免混用結果。需重新辨識已完成資料時應先明確決定如何保留舊成果，不另創任意命名目錄。
 
-使用 PyMuPDF 200 DPI 與本機 PaddleOCR PP-OCRv6 CPU 模型。長作業由 Hermes 終端工作階段執行並持續查看進度。工具等待逾時不代表 OCR 已停止，作業鎖會拒絕同時寫入。
+每一頁先嘗試 PyMuPDF native text；native text 不足時才初始化本機 PaddleOCR PP-OCRv6 CPU 模型。頁面仍以 PyMuPDF 200 DPI render 保留視覺核對來源。長作業由 Hermes 終端工作階段執行並持續查看進度。工具等待逾時不代表 OCR 已停止，作業鎖會拒絕同時寫入。
 
 ## 結構化與 QA
 
