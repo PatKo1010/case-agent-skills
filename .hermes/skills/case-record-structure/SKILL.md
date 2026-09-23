@@ -1,17 +1,17 @@
 ---
 name: case-record-structure
-description: Fourth stage for PDF case questions. Build semantic case records from validated document hierarchy; use normalized pages and page images only for source verification.
+description: Optional semantic indexing only when the user explicitly requests case indexes. Not a prerequisite for PDF questions. Build semantic case records from validated document hierarchy; use normalized pages and page images only for source verification.
 ---
 
 # Case Record Structure
 
-Pipeline:
+Default pipeline: `pdf-ingest → document-layout → document-structure → grounded-case-qa`.
 
-`pdf-ingest → document-layout → document-structure → case-record-structure → grounded-case-qa`
+This skill is outside the default pipeline. Run it only for an explicit indexing request; ordinary questions proceed directly from document structure to QA.
 
-## Stage 4/5: semantic indexing
+## Optional: semantic indexing
 
-Display **“Stage 4/5: Building or validating case semantic indexes.”**
+Display **“Optional: Building or validating case semantic indexes.”**
 
 Before extraction require valid:
 - ingest bundle
@@ -34,4 +34,4 @@ Validate with:
 
 ## Mandatory handoff
 
-Display **“Stage 4/5 complete; proceeding to grounded QA.”** and load `grounded-case-qa`.
+For an indexing-only request, report the outputs and validation result and stop. If the user also asked a question, load `grounded-case-qa` and answer it from source pages.

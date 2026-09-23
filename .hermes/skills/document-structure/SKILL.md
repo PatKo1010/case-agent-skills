@@ -7,13 +7,13 @@ description: Third stage for PDF case questions. Combine validated PP-DocLayoutV
 
 Pipeline:
 
-`pdf-ingest → document-layout → document-structure → case-record-structure → grounded-case-qa`
+`pdf-ingest → document-layout → document-structure → grounded-case-qa`
 
 This stage answers: **how are the already-detected page regions organized into documents and blocks?**
 
-## Stage 3/5: hierarchy assembly
+## Stage 3/4: hierarchy assembly
 
-Display: **“Stage 3/5: Building or validating document hierarchy.”**
+Display: **“Stage 3/4: Building or validating document hierarchy.”**
 
 1. Validate ingest and layout.
 2. Reuse structure only when its validator succeeds.
@@ -40,5 +40,6 @@ Document title belongs to a document, not every page.
 
 ## Mandatory handoff
 
-1. Display **“Stage 3/5 complete; proceeding to case semantic indexing.”**
-2. Load `case-record-structure`.
+1. Display **“Stage 3/4 complete; proceeding directly to source-grounded QA.”**
+2. Load `grounded-case-qa`.
+3. Execute QA now with the canonical case directory and original question. Do not build or validate semantic indexes; a handoff announcement alone does not complete a question.

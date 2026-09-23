@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Return the earliest missing/stale skill in the five-stage pipeline."""
+"""Return the earliest missing/stale skill in the four-stage pipeline."""
 import argparse
 import json
 from pathlib import Path
@@ -10,8 +10,6 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "document-layout" /
 from validate_document_layout import validate as validate_layout
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "document-structure" / "scripts"))
 from validate_document_structure import validate as validate_structure
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "case-record-structure" / "scripts"))
-from validate_case_records import validate_records
 
 
 def inspect_case(pdf):
@@ -21,12 +19,11 @@ def inspect_case(pdf):
         "normalized_dir": str(root / "normalized"),
         "layout_dir": str(root / "layout"),
         "structure_dir": str(root / "structure"),
-        "records_dir": str(root / "records"),
         "next_skill": "pdf-ingest",
         "ingest_valid": False,
         "layout_valid": False,
         "structure_valid": False,
-        "records_valid": False,
+        "qa_ready": False,
     }
     try:
         manifest = validate_bundle(root)
@@ -50,12 +47,7 @@ def inspect_case(pdf):
     except Exception as exc:
         result["reason"] = str(exc); return result
 
-    result["next_skill"] = "case-record-structure"
-    try:
-        validate_records(root / "records", root)
-        result.update(records_valid=True, next_skill="grounded-case-qa")
-    except Exception as exc:
-        result["reason"] = str(exc)
+    result.update(qa_ready=True, next_skill="grounded-case-qa")
     return result
 
 

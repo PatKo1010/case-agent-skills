@@ -3,6 +3,9 @@ from pathlib import Path
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
+import contextlib
+import io
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'.hermes/skills/pdf-ingest/scripts'))
@@ -11,6 +14,8 @@ sys.path.insert(0,str(ROOT/'.hermes/skills/document-layout/scripts'))
 from validate_document_layout import validate as validate_layout
 sys.path.insert(0,str(ROOT/'.hermes/skills/document-structure/scripts'))
 from validate_document_structure import validate as validate_structure
+import build_document_structure
+import locate_case
 
 
 class PipelineTests(unittest.TestCase):
@@ -61,6 +66,31 @@ class PipelineTests(unittest.TestCase):
         # validator should reject absent structure until it is built.
         with self.assertRaises(Exception):
             validate_structure(self.case/'structure',self.case)
+        # The locator must finish at structure, without requiring semantic records.
+        renamed = self.root/'output_source'
+        self.case.rename(renamed)
+        self.case = renamed
+        with patch.object(locate_case, 'output_for', return_value=self.case):
+            self.assertEqual(locate_case.inspect_case('case.pdf')['next_skill'], 'document-structure')
+            with patch.object(sys, 'argv', ['build_document_structure.py', str(self.case)]), contextlib.redirect_stdout(io.StringIO()):
+                build_document_structure.main()
+            (self.case/'records').rmdir()
+            result = locate_case.inspect_case('case.pdf')
+            self.assertEqual(result['next_skill'], 'grounded-case-qa')
+            self.assertTrue(result['qa_ready'])
+            self.assertFalse((self.case/'records').exists())
+            (self.case/'records').mkdir()
+            (self.case/'records/events.jsonl').write_text('{invalid json')
+            self.assertTrue(locate_case.inspect_case('case.pdf')['qa_ready'])
+            # Required layers still block reuse if changed or missing.
+            (self.case/'structure/blocks.jsonl').write_text('')
+            result = locate_case.inspect_case('case.pdf')
+            self.assertEqual(result['next_skill'], 'document-structure')
+            self.assertFalse(result['qa_ready'])
+            (self.case/'layout/layout_manifest.json').unlink()
+            self.assertEqual(locate_case.inspect_case('case.pdf')['next_skill'], 'document-layout')
+            (self.case/'normalized/page-001.json').unlink()
+            self.assertEqual(locate_case.inspect_case('case.pdf')['next_skill'], 'pdf-ingest')
 
 
 if __name__=='__main__':

@@ -9,9 +9,9 @@ This stage answers: **what visual regions exist on each page, and in what readin
 
 It does not decide document boundaries or case semantics.
 
-## Stage 2/5: PP-DocLayoutV2
+## Stage 2/4: PP-DocLayoutV2
 
-Display: **“Stage 2/5: Running or validating document layout analysis.”**
+Display: **“Stage 2/4: Running or validating document layout analysis.”**
 
 1. Validate ingest:
    `.venv/bin/python .hermes/skills/pdf-ingest/scripts/validate_ingest_bundle.py CASE_DIR`
@@ -38,6 +38,6 @@ See `references/layout-schema.md`.
 
 ## Mandatory handoff
 
-1. Display **“Stage 2/5 complete; proceeding to document hierarchy assembly.”**
+1. Display **“Stage 2/4 complete; proceeding to document hierarchy assembly.”**
 2. Load `document-structure`.
 3. Pass `CASE_DIR`, layout directory and original question.

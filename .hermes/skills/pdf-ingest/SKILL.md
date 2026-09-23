@@ -7,13 +7,13 @@ description: First stage for PDF case questions. Render pages, prefer native PDF
 
 Pipeline:
 
-`pdf-ingest → document-layout → document-structure → case-record-structure → grounded-case-qa`
+`pdf-ingest → document-layout → document-structure → grounded-case-qa`
 
 This skill extracts source text only. It must not infer document hierarchy or case semantics.
 
-## Stage 1/5: adaptive ingest
+## Stage 1/4: adaptive ingest
 
-Display: **“Stage 1/5: Building or validating normalized PDF pages.”**
+Display: **“Stage 1/4: Building or validating normalized PDF pages.”**
 
 1. Run the locator first:
    `.venv/bin/python .hermes/skills/pdf-ingest/scripts/locate_case.py INPUT.pdf`
@@ -41,6 +41,6 @@ See `references/page-schema.md`.
 
 Unless the user explicitly requested only text extraction:
 
-1. Display **“Stage 1/5 complete; proceeding to document layout analysis.”**
+1. Display **“Stage 1/4 complete; proceeding to document layout analysis.”**
 2. Load `document-layout`.
 3. Pass the canonical case directory and original question.

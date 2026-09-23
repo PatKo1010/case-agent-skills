@@ -9,8 +9,6 @@ document-layout
   ↓
 document-structure
   ↓
-case-record-structure
-  ↓
 grounded-case-qa
 ```
 
@@ -21,7 +19,7 @@ grounded-case-qa
 | `pdf-ingest` | Render PDF, prefer native text per page, PaddleOCR fallback, normalize bbox coordinates | `page/`, `normalized/`, `manifest.json` |
 | `document-layout` | PP-DocLayoutV2 visual region detection + reading order | `layout/page-NNN.json`, `layout_manifest.json` |
 | `document-structure` | Align text to layout; infer document boundaries, page roles and hierarchy | `structure/*.jsonl` |
-| `case-record-structure` | Hermes semantic extraction: documents/entities/events/evidence/conflicts | `records/*.jsonl` |
+| `case-record-structure` (optional, explicit request only) | Hermes semantic extraction: documents/entities/events/evidence/conflicts | `records/*.jsonl` |
 | `grounded-case-qa` | Source-grounded question answering | cited final answer |
 
 ## Install
@@ -57,7 +55,7 @@ output_<PDF_SHA256>/
 ├── normalized/
 ├── layout/
 ├── structure/
-├── records/
+├── records/  (optional)
 ├── job.json
 └── manifest.json
 ```
@@ -68,7 +66,7 @@ output_<PDF_SHA256>/
 .venv/bin/python .hermes/skills/pdf-ingest/scripts/locate_case.py INPUT.pdf
 ```
 
-The locator validates each cached layer and returns the earliest required skill.
+The locator validates ingest, layout and structure, then routes directly to grounded-case-qa. It does not inspect or require records/. Missing or stale semantic indexes do not block answering.
 
 ## Design
 
@@ -77,7 +75,7 @@ The responsibility split is deliberate:
 - **pdf-ingest:** what text is on the physical page?
 - **document-layout:** what visual regions are present?
 - **document-structure:** how are those regions organized into documents/pages/blocks?
-- **case-record-structure:** what do those records mean for the case?
+- **case-record-structure (optional):** what do those records mean for the case?
 - **grounded-case-qa:** what does the source-supported answer say?
 
 This avoids asking the LLM to simultaneously solve OCR, layout recognition, hierarchy reconstruction and case reasoning.
