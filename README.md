@@ -1,6 +1,6 @@
-# Case agent skills
+# 案件分析 Skills
 
-Hermes PDF pipeline:
+本專案透過 Hermes 執行 PDF 卷宗處理與來源問答，預設流程如下：
 
 ```
 pdf-ingest
@@ -12,19 +12,37 @@ document-structure
 grounded-case-qa
 ```
 
-## Skills
+## 技能分工
 
-| Skill | Responsibility | Main output |
+| 技能 | 職責 | 主要輸出 |
 | --- | --- | --- |
-| `pdf-ingest` | Render PDF, prefer native text per page, PaddleOCR fallback, normalize bbox coordinates | `page/`, `normalized/`, `manifest.json` |
-| `document-layout` | PP-DocLayoutV2 visual region detection + reading order | `layout/page-NNN.json`, `layout_manifest.json` |
-| `document-structure` | Align text to layout; infer document boundaries, page roles and hierarchy | `structure/*.jsonl` |
-| `case-record-structure` (optional, explicit request only) | Hermes semantic extraction: documents/entities/events/evidence/conflicts | `records/*.jsonl` |
-| `grounded-case-qa` | Source-grounded question answering | cited final answer |
+| `pdf-ingest` | 將 PDF 轉為頁面圖片，逐頁優先擷取原生文字，必要時使用 PaddleOCR，並統一文字框座標 | `page/`, `normalized/`, `manifest.json` |
+| `document-layout` | 使用 PP-DocLayoutV2 偵測版面區域與閱讀順序 | `layout/page-NNN.json`, `layout_manifest.json` |
+| `document-structure` | 對齊文字與版面，推定文件邊界、頁面角色及區塊階層 | `structure/*.jsonl` |
+| `case-record-structure`（選用，僅於明確要求時執行） | 由 Hermes 擷取文件、實體、事件、證據與矛盾等案件語義紀錄 | `records/*.jsonl` |
+| `grounded-case-qa` | 依來源內容回答問題，核對事實並附上頁碼 | 附來源引用的最終回答 |
 
-## Demo 問答
+## 相較於未使用 Skills 的設計優點
 
-以下五組問答選自 [case_answers_20.json](case_answers_20.json)，以《合成偵查卷宗－9頁合併》展示不同查詢情境。回答與來源標記保留該檔內容，屬於 demo 輸出範例，不代表已通過 golden set 評分；頁碼為實體 PDF 頁碼。
+這裡的「未使用 Skills」是指直接把 PDF 或 OCR 文字交給模型，再由每次對話臨時決定處理方式。Skills 將處理步驟、驗證條件與回答要求保存成可重用的規則，讓同類任務更容易一致執行。
+
+| 比較面向 | 未使用 Skills、由對話臨時安排 | 本專案的 Skills 設計 |
+| --- | --- | --- |
+| 流程一致性 | 是否辨識掃描頁、檢查資料或附引用，依當次指令與模型執行而定 | 定義文字擷取、版面分析、文件結構與來源問答的分工及交接條件 |
+| 重複使用 | 若未另外設計快取，後續問題可能重做文字擷取與前處理 | 以 PDF 內容雜湊定位資料，驗證有效的既有產物後重用 |
+| 文件導航 | 直接閱讀攤平文字時，表格、頁面及段落關係較難追蹤 | 保存版面區域、閱讀順序、頁碼與區塊階層，協助定位相關內容 |
+| 來源追溯 | 引用格式與原文核對需要每次另外要求 | QA 規則要求回答使用的事實與引述回查來源，並附實體 PDF 頁碼 |
+| 不確定性處理 | 若未明確要求，容易忽略辨識疑點或將陳述當成定論 | 明訂保留矛盾、區分陳述與推論，證據不足時說明限制 |
+| 除錯與評估 | 中間處理結果未必保存，較難定位錯誤發生在哪一步 | 各層產物獨立保存及驗證，可搭配標準問答集檢查檢索與回答表現 |
+| 問答前置工作 | 完整抽取或直接閱讀的策略需臨時決定 | 預設在文件結構完成後直接問答，只有明確要求時才建立案件語義索引 |
+
+這些優點來自流程與工具的明確約定，不代表模型本身因此變得更準確。未使用 Skills 的流程也可以另行實作相同機制；本專案的價值在於將它們整理為可重用的操作規則。
+
+首次處理仍需執行文字擷取、版面分析與結構組裝；對少量文件的一次性問題，可能比直接閱讀更慢、消耗更多 token。同一份卷宗反覆查詢時，重用前處理結果與定位相關區塊才可能降低成本。驗證能檢查資料格式與來源綁定，不能保證 OCR、文件分界或答案語義正確；是否更快、更省或更準，仍需以相同文件與問題實測。
+
+## 示範問答
+
+以下五組問答選自 [case_answers_20.json](case_answers_20.json)，以《合成偵查卷宗－9頁合併》展示不同查詢情境。回答與來源標記保留該檔內容，屬於示範輸出，不代表已通過標準問答集（golden set）評分；頁碼為實體 PDF 頁碼。
 
 ### 1. 投資話術檢索（原第 5 題）
 
@@ -66,32 +84,32 @@ grounded-case-qa
 
 **來源：** 第 6 頁，區塊 `p006-r010`。
 
-## Install
+## 安裝
 
-Python 3.11:
+使用 Python 3.11 建立環境並安裝相依套件：
 
 ```bash
 python3.11 -m venv .venv
 .venv/bin/python -m pip install -r requirement.txt
 ```
 
-PaddleOCR PP-OCRv6 weights are used only for pages without enough native text.
+只有原生文字不足的頁面，才會使用 PaddleOCR PP-OCRv6 模型進行文字辨識。
 
-### Initialize PP-DocLayoutV2 once
+### 首次初始化 PP-DocLayoutV2
 
-The layout skill uses PaddleOCR's `LayoutDetection(model_name="PP-DocLayoutV2")`. The official model may download on first use. For an offline Hermes demo, initialize it in advance:
+版面分析技能使用 PaddleOCR 的 `LayoutDetection(model_name="PP-DocLayoutV2")`。首次使用時可能下載官方模型；若要離線展示 Hermes，請先完成初始化：
 
 ```bash
 .venv/bin/python - <<'PY'
 from paddleocr import LayoutDetection
 LayoutDetection(model_name="PP-DocLayoutV2", device="cpu")
-print("PP-DocLayoutV2 initialized")
+print("PP-DocLayoutV2 初始化完成")
 PY
 ```
 
-If the local model exists at `~/.paddlex/official_models/PP-DocLayoutV2`, the layout script automatically uses it.
+若本機已有 `~/.paddlex/official_models/PP-DocLayoutV2`，版面分析腳本會自動使用該模型。
 
-## Output
+## 輸出檔案
 
 ```text
 output_<PDF_SHA256>/
@@ -99,27 +117,27 @@ output_<PDF_SHA256>/
 ├── normalized/
 ├── layout/
 ├── structure/
-├── records/  (optional)
+├── records/  （選用）
 ├── job.json
 └── manifest.json
 ```
 
-## Entry point
+## 執行入口
 
 ```bash
 .venv/bin/python .hermes/skills/pdf-ingest/scripts/locate_case.py INPUT.pdf
 ```
 
-The locator validates ingest, layout and structure, then routes directly to grounded-case-qa. It does not inspect or require records/. Missing or stale semantic indexes do not block answering.
+定位程式依序驗證文字擷取、版面與文件結構，回傳下一個應執行的技能。三層資料都有效時，直接進入 `grounded-case-qa`。預設流程不檢查也不要求 `records/`，缺少或過期的案件語義索引不會阻擋問答。
 
-## Design
+## 設計原則
 
-The responsibility split is deliberate:
+各技能分別處理不同問題：
 
-- **pdf-ingest:** what text is on the physical page?
-- **document-layout:** what visual regions are present?
-- **document-structure:** how are those regions organized into documents/pages/blocks?
-- **case-record-structure (optional):** what do those records mean for the case?
-- **grounded-case-qa:** what does the source-supported answer say?
+- **pdf-ingest：** 實體頁面上有哪些文字？
+- **document-layout：** 頁面包含哪些視覺區域？閱讀順序為何？
+- **document-structure：** 這些區域如何組成文件、頁面與區塊階層？
+- **case-record-structure（選用）：** 如何將來源整理為案件的實體、事件與證據索引？
+- **grounded-case-qa：** 來源支持什麼答案，還有哪些不確定之處？
 
-This avoids asking the LLM to simultaneously solve OCR, layout recognition, hierarchy reconstruction and case reasoning.
+文字辨識、版面偵測與結構組裝由對應工具處理，Hermes 負責依問題閱讀來源與回答，讓各階段的產物與錯誤較容易追查。
