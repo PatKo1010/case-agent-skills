@@ -1,32 +1,42 @@
 ---
 name: grounded-case-qa
-description: Final stage of PDF case questions. Answer from validated current indexes with source-page citations and uncertainty. If OCR or indexes are missing or stale, load and execute the preceding skills in the same Hermes conversation before answering. Also use to query existing case timelines, evidence and conflicting statements.
+description: Final fourth stage of PDF case questions. Answer from validated semantic indexes, use lightweight document structure for navigation and normalized pages/images for verification, with source-page citations and uncertainty.
 ---
 
 # Grounded Case QA
 
 ## Entry gate
 
-For a PDF request, `locate_case.py INPUT.pdf` identifies the canonical project-root `output_<PDF SHA256>/`. When it reports `grounded-case-qa`, reuse its validated OCR/indexes directly; do not rerun the earlier skills. Use that output root as `OCR_DIR`, and its `records/` child as `RECORD_DIR`. A follow-up question uses the same paths, with the validation below repeated before answering.
+For every PDF request, use `locate_case.py INPUT.pdf`. When it returns `grounded-case-qa`, all prerequisite layers have passed validation.
 
-The current Hermes agent performs retrieval and answering; no separate model process or API call is needed. Keep the user's original question and the current OCR/index directories.
+Use:
+- `CASE_DIR = output_<SHA256>`
+- `STRUCTURE_DIR = CASE_DIR/structure`
+- `RECORD_DIR = CASE_DIR/records`
 
-Before substantive answering, run from the project root:
-`.venv/bin/python .hermes/skills/case-record-structure/scripts/validate_case_records.py RECORD_DIR --ocr-dir OCR_DIR`
+Before answering, validate both:
 
-Require success. This checks five outputs, source quotes, page references, OCR fingerprint and index file hashes. OCR text alone does not satisfy the entry gate.
+`.venv/bin/python .hermes/skills/document-structure/scripts/validate_document_structure.py STRUCTURE_DIR --case-dir CASE_DIR`
 
-If OCR is missing or incomplete, use `skill_view` to load and execute `pdf-scan-ingest`. If OCR is valid but indexes are missing, stale or invalid, load and execute `case-record-structure`. If `skill_view` is unavailable, read the corresponding `.hermes/skills/NAME/SKILL.md`. The same Hermes agent completes the prerequisites and returns here in the same turn. Do not defer to an unspecified outer workflow or ask the user to run another model. If required tools are unavailable, report the concrete blocker and remaining stages.
+`.venv/bin/python .hermes/skills/case-record-structure/scripts/validate_case_records.py RECORD_DIR --ocr-dir CASE_DIR`
 
-## Stage 3: Retrieve and answer
+If a prerequisite is stale, execute the `next_skill` returned by the locator rather than bypassing it.
 
-After the entry gate passes, display “Stage 3/3: Retrieving from case indexes and producing an answer with page citations.”
+## Stage 4/4: Retrieve and answer
+
+Display: **“Stage 4/4: Retrieving case evidence and producing a source-grounded answer.”**
 
 1. Classify the question as lookup, timeline, cross-document comparison, evidence-list or legal interpretation.
-2. Retrieve candidate records from the validated indexes by identifiers, entities, dates and meaning. Use OCR second to check quoted context; use page images to check recognition. Read-only work applies during QA; return to the prior skill when a prerequisite needs repair.
-3. Support every material claim with source pages; cite all necessary pages for cross-document answers. Distinguish allegations, interviewee statements and investigator conclusions.
-4. Apply `references/runtime-prompt.md` as instructions for your current response, not as a prompt for a separate API request. Answer concisely with `Source: page X (document title)` and relevant uncertainty. Mask sensitive identifiers unless exact disclosure is necessary and authorized.
-5. Report conflicting versions. If evidence is absent or a key value has confidence below 0.80, state insufficient evidence and the needed visual check. Clearly label reliance on unverified OCR; never imply visual checks occurred when they did not.
-6. Display “Stage 3/3 complete” only with the final cited answer or a supported finding of insufficient evidence. An OCR result or indexing report is not the final answer to a PDF question.
+2. Search semantic records first.
+3. Use `structure/documents.jsonl` and `blocks.jsonl` to navigate the relevant document/page/block.
+4. Verify exact quotes and ambiguous values against normalized page text; use page images when visual recognition/layout matters.
+5. Support every material claim with source pages and distinguish allegations, interviewee statements and investigator conclusions.
+6. Report conflicting versions rather than collapsing them.
+7. If evidence is absent or materially uncertain, say so and identify the needed source/visual check.
+8. Display **“Stage 4/4 complete”** only with the final cited answer or a supported finding of insufficient evidence.
 
-Answer document-content questions, not personalized legal strategy.
+The evidence hierarchy is:
+
+`semantic record → structural block → normalized page text → page image`
+
+Structural labels help retrieval; they do not themselves prove semantic claims.
