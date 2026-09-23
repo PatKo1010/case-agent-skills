@@ -16,6 +16,8 @@ def main():
     parser.add_argument("--det-model-dir", type=Path, default=models / "PP-OCRv6_medium_det")
     parser.add_argument("--rec-model-dir", type=Path, default=models / "PP-OCRv6_medium_rec")
     parser.add_argument("--uncertain-threshold", type=float, default=0.9)
+    parser.add_argument("--native-min-chars", type=int, default=40,
+                        help="Use native PDF text for a page when enough visible characters are extractable")
     parser.add_argument("--resume", action="store_true", help="Continue the same job, validating cached pages")
     args = parser.parse_args()
     if not 0 <= args.uncertain_threshold <= 1:
@@ -63,9 +65,9 @@ def run(args, ocr_factory=None):
             },
         }
         config = {"source_sha256": sha(args.pdf), "ocr_engine": engine,
-                  "uncertain_threshold": args.uncertain_threshold, "dpi": 200,
+                  "uncertain_threshold": args.uncertain_threshold, "native_min_chars": args.native_min_chars, "dpi": 200,
                   "renderer_version": importlib.metadata.version("PyMuPDF"),
-                  "pipeline_version": 1}
+                  "pipeline_version": 2}
         job_path = args.output / "job.json"
         if existing:
             if not job_path.exists():
@@ -110,31 +112,42 @@ def run(args, ocr_factory=None):
                         path.rename(path.with_suffix(f".replaced-{time.time_ns()}"))
                     pending.append(page)
             if pending:
-                print(f"Job {job['job_id']}: initializing OCR; {len(pending)} pages pending", flush=True)
-                os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
-                if ocr_factory is None:
-                    from paddleocr import PaddleOCR
-                    ocr_factory = PaddleOCR
-                ocr = ocr_factory(
-                    text_detection_model_name="PP-OCRv6_medium_det",
-                    text_detection_model_dir=str(args.det_model_dir.resolve()),
-                    text_recognition_model_name="PP-OCRv6_medium_rec",
-                    text_recognition_model_dir=str(args.rec_model_dir.resolve()),
-                    use_doc_orientation_classify=False, use_doc_unwarping=False,
-                    use_textline_orientation=False, text_rec_score_thresh=0.0, device="cpu",
-                )
+                print(f"Job {job['job_id']}: {len(pending)} pages pending adaptive ingest", flush=True)
+                ocr = None
                 for page in pending:
                     started = time.monotonic()
                     job.update(current_page=page["page"], page_started_at=time.time())
                     atomic(job_path, job)
                     print(f"Page {page['page']}/{manifest['page_count']}: starting", flush=True)
-                    data = recognize_page(ocr, args, page, engine)
+
+                    data = extract_native_page(args.pdf, page, engine, args.native_min_chars)
+                    if data is None:
+                        if ocr is None:
+                            print("Initializing PaddleOCR fallback for scanned/low-text pages", flush=True)
+                            os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+                            if ocr_factory is None:
+                                from paddleocr import PaddleOCR
+                                ocr_factory = PaddleOCR
+                            ocr = ocr_factory(
+                                text_detection_model_name="PP-OCRv6_medium_det",
+                                text_detection_model_dir=str(args.det_model_dir.resolve()),
+                                text_recognition_model_name="PP-OCRv6_medium_rec",
+                                text_recognition_model_dir=str(args.rec_model_dir.resolve()),
+                                use_doc_orientation_classify=False, use_doc_unwarping=False,
+                                use_textline_orientation=False, text_rec_score_thresh=0.0, device="cpu",
+                            )
+                        data = recognize_page(ocr, args, page, engine)
+
                     path = output / f"page-{page['page']:03d}.json"
                     atomic(path, data)
                     elapsed = time.monotonic() - started
                     job["pages"][str(page["page"])] = {"sha256": sha(path), "seconds": round(elapsed, 3)}
                     atomic(job_path, job)
-                    print(f"Page {page['page']}/{manifest['page_count']}: complete in {elapsed:.1f}s", flush=True)
+                    print(
+                        f"Page {page['page']}/{manifest['page_count']}: "
+                        f"{data.get('extraction_method', 'unknown')} complete in {elapsed:.1f}s",
+                        flush=True,
+                    )
             validate_bundle(args.output, require_complete=False)
             manifest["status"] = "complete"
             atomic(manifest_path, manifest)
@@ -146,6 +159,48 @@ def run(args, ocr_factory=None):
             atomic(job_path, job)
             raise
 
+
+
+def extract_native_page(pdf_path, page, engine, min_chars):
+    """Return normalized native PDF text, or None when OCR fallback is needed."""
+    try:
+        import fitz
+        doc = fitz.open(pdf_path)
+        pdf_page = doc.load_page(page["page"] - 1)
+        raw_blocks = pdf_page.get_text("blocks")
+        blocks = []
+        for item in sorted(raw_blocks, key=lambda b: (b[1], b[0])):
+            text = (item[4] or "").strip()
+            if not text:
+                continue
+            blocks.append({
+                "type": "paragraph",
+                "text": text,
+                "bbox": [float(item[0]), float(item[1]), float(item[2]), float(item[3])],
+                "confidence": 1.0,
+            })
+        doc.close()
+        text = "\n".join(block["text"] for block in blocks)
+        visible_chars = sum(1 for ch in text if not ch.isspace())
+        if visible_chars < min_chars:
+            return None
+        return {
+            "document_id": pdf_path.stem,
+            "page": page["page"],
+            "image_sha256": page["sha256"],
+            "raw_text": text,
+            "corrected_text": text,
+            "blocks": blocks,
+            "uncertain_spans": [],
+            "ocr_engine": engine,
+            "extraction_method": "native_text",
+            "verification": "unverified",
+            "corrections": [],
+            "verification_note": "Native PDF text layer extracted with PyMuPDF; no visual verification.",
+            "warnings": [],
+        }
+    except Exception:
+        return None
 
 def recognize_page(ocr, args, page, engine):
     results = list(ocr.predict(str(args.output / page["file"])))
@@ -164,6 +219,7 @@ def recognize_page(ocr, args, page, engine):
         "document_id": args.pdf.stem, "page": page["page"],
         "image_sha256": page["sha256"], "raw_text": text, "corrected_text": text,
         "blocks": blocks, "uncertain_spans": uncertain, "ocr_engine": engine,
+        "extraction_method": "paddleocr",
         "verification": "unverified", "corrections": [],
         "verification_note": "Automatic PaddleOCR output; no visual verification or semantic layout classification.",
         "warnings": [] if blocks else ["No text detected; inspect the source image."],
