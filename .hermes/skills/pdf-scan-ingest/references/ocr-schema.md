@@ -1,7 +1,18 @@
-# OCR page schema
+# Normalized page schema
+
+The historical directory name is `ocr/`, but each page JSON is now a **normalized page artifact** and can originate from native PDF text or PaddleOCR.
 
 Required fields: `document_id`, `page`, `image_sha256`, `raw_text`, `corrected_text`, `blocks`, `uncertain_spans`, `ocr_engine`, and `verification`.
 
-Each block contains `type` (`title`, `paragraph`, `table`, `checkbox`, `stamp`, or `handwriting`), `text`, optional `bbox`, and `confidence` from 0 to 1.
+Recommended field:
+- `extraction_method`: `native_text` or `paddleocr`
 
-PaddleOCR emits one recognized line per `paragraph` block, without semantic classification. `bbox` is `[x_min, y_min, x_max, y_max]` in rendered-image pixels. Reading order is the engine's order; tables and checkboxes require separate interpretation. Confidence measures recognition, not factual accuracy. `ocr_engine` records engine version, model names, and weight hashes. `verification: unverified` means no visual review has occurred. An empty page has a warning and still needs inspection; high-confidence text can also be wrong.
+Each block contains:
+- `type` (ingest normally emits `paragraph`; semantic layout classification belongs to document-structure)
+- `text`
+- optional `bbox`
+- `confidence` from 0 to 1
+
+For native text, bbox coordinates are PDF page coordinates and confidence is extraction confidence rather than OCR probability. For PaddleOCR, bbox is in rendered-image pixels and confidence is recognition confidence.
+
+`verification: unverified` means no visual review has occurred. Native extraction is not equivalent to visual verification. An empty/low-text page can trigger OCR fallback and still requires inspection when important evidence is expected.
