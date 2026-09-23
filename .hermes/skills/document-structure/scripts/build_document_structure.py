@@ -1,74 +1,88 @@
 #!/usr/bin/env python3
-"""Build a deterministic lightweight document structure from a validated case ingest bundle."""
+"""Build hierarchy by aligning normalized text with PP-DocLayoutV2 regions."""
 import argparse
+import hashlib
 import json
 import re
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pdf-scan-ingest" / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "pdf-ingest" / "scripts"))
 from bundle import atomic, fingerprint, read, sha, validate_bundle
 
-SCHEMA_VERSION = 1
-STRUCTURE_FILES = ("pages.jsonl", "documents.jsonl", "blocks.jsonl")
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "document-layout" / "scripts"))
+from validate_document_layout import layout_fingerprint, validate as validate_layout
 
-DOC_START_KEYWORDS = (
-    "筆錄", "調查", "報告", "函", "書", "清單", "明細", "紀錄", "附件",
-    "聲請", "搜索票", "傳票", "起訴", "判決", "證物", "statement",
-    "report", "record", "schedule", "attachment", "exhibit", "invoice",
-)
-QA_RE = re.compile(r"^(?:問|答|q|a)\s*[:：、.]?", re.I)
-NUMBERISH_RE = re.compile(r"(?:\d[\d,./:-]*\d|[$NT¥￥]\s*\d|\d+\s*(?:元|圓))")
+SCHEMA_VERSION = 2
+FILES = ("documents.jsonl", "pages.jsonl", "blocks.jsonl")
+QA_RE = re.compile(r"^(?:問|答|Q|A)\s*[:：、.]?", re.I)
+
+LABEL_MAP = {
+    "document_title": "title",
+    "paragraph_title": "heading",
+    "section_header": "heading",
+    "text": "narrative",
+    "vertical_text": "narrative",
+    "table": "table",
+    "image": "figure",
+    "chart": "figure",
+    "figure_title": "heading",
+    "figure_table_title": "heading",
+    "header": "header",
+    "footer": "footer",
+    "page_number": "footer",
+    "seal": "seal",
+}
 
 
 def dump_jsonl(path, rows):
-    text = "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in rows)
-    Path(path).write_text(text, encoding="utf-8")
+    Path(path).write_text(
+        "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows),
+        encoding="utf-8",
+    )
 
 
-def normalized_blocks(page_data):
-    blocks = page_data.get("blocks") or []
-    if blocks:
-        return blocks
-    text = page_data.get("corrected_text", "")
-    return [{"type": "paragraph", "text": line, "bbox": None, "confidence": 1.0}
-            for line in text.splitlines() if line.strip()]
+def area(box):
+    return max(0.0, box[2]-box[0]) * max(0.0, box[3]-box[1])
 
 
-def looks_title(text, index):
-    t = text.strip()
-    if not t or len(t) > 60:
-        return False
-    if index <= 4 and any(k.lower() in t.lower() for k in DOC_START_KEYWORDS):
-        return True
-    if index <= 2 and len(t) <= 28 and not t.endswith(("。", ".", "；", ";")):
-        return True
-    return False
+def overlap_ratio(block, region):
+    x1=max(block[0], region[0]); y1=max(block[1], region[1])
+    x2=min(block[2], region[2]); y2=min(block[3], region[3])
+    inter=max(0.0, x2-x1)*max(0.0, y2-y1)
+    return inter / max(area(block), 1.0)
 
 
-def classify(text, index):
-    t = text.strip()
-    if QA_RE.match(t):
-        return "qa", 0.96, "qa_prefix"
-    if looks_title(t, index):
-        return "title", 0.82, "short_top_or_document_keyword"
-    # Conservative table hint: several numeric fields or explicit column separators.
-    numeric_fields = len(NUMBERISH_RE.findall(t))
-    separators = t.count("|") + t.count("\t")
-    if separators >= 2 or (numeric_fields >= 3 and len(t) <= 120):
-        return "table", 0.68, "row_like_numeric_or_delimited"
-    return "narrative", 0.90, "default_narrative"
+def map_type(label, text):
+    if QA_RE.match((text or "").strip()):
+        return "qa"
+    return LABEL_MAP.get(label, "other")
 
 
-def boundary_candidate(blocks, page_num):
-    if page_num == 1:
-        title = next((b.get("text", "").strip() for b in blocks if b.get("text", "").strip()), "Document 1")
-        return True, title[:120], 1.0, "first_page"
-    for i, b in enumerate(blocks[:5]):
-        text = b.get("text", "").strip()
-        if text and any(k.lower() in text.lower() for k in DOC_START_KEYWORDS) and len(text) <= 80:
-            return True, text[:120], 0.78, "top_page_document_keyword"
-    return False, None, 0.0, "continuation"
+def region_text(region, source_blocks):
+    matched = []
+    for i, block in enumerate(source_blocks):
+        bbox = block.get("bbox")
+        if isinstance(bbox, list) and len(bbox) == 4:
+            score = overlap_ratio(bbox, region["bbox"])
+            if score >= 0.45:
+                matched.append((region["reading_order"], i, block, score))
+    matched.sort(key=lambda x: (x[2]["bbox"][1], x[2]["bbox"][0]))
+    text = "\n".join(x[2].get("text", "") for x in matched if x[2].get("text"))
+    return text, matched
+
+
+def choose_page_role(regions, structured_blocks):
+    labels = [r["label"] for r in regions]
+    if any(r["label"] == "document_title" and r["score"] >= 0.70 for r in regions):
+        return "document_start"
+    if labels.count("table") >= 1:
+        return "table_page"
+    if sum(1 for b in structured_blocks if b["type"] == "qa") >= 2:
+        return "qa_page"
+    if any(l in ("image", "chart") for l in labels):
+        return "figure_page"
+    return "continuation"
 
 
 def main():
@@ -76,86 +90,129 @@ def main():
     parser.add_argument("case_dir", type=Path)
     args = parser.parse_args()
     case_dir = args.case_dir.resolve()
-    manifest = validate_bundle(case_dir)
+    source = validate_bundle(case_dir)
+    validate_layout(case_dir / "layout", case_dir)
+
     out = case_dir / "structure"
     out.mkdir(exist_ok=True)
-
-    pages_rows, docs_rows, block_rows = [], [], []
+    documents, pages, blocks = [], [], []
     current_doc = None
     doc_index = 0
 
-    for page_meta in manifest["pages"]:
-        page_num = page_meta["page"]
-        page_data = read(case_dir / "ocr" / f"page-{page_num:03d}.json")
-        blocks = normalized_blocks(page_data)
-        starts, candidate_title, boundary_conf, boundary_rule = boundary_candidate(blocks, page_num)
+    for page_meta in source["pages"]:
+        page_no = page_meta["page"]
+        normalized = read(case_dir / "normalized" / f"page-{page_no:03d}.json")
+        layout = read(case_dir / "layout" / f"page-{page_no:03d}.json")
+        source_blocks = normalized.get("blocks", [])
+        page_blocks = []
+        used_source = set()
+        current_heading = None
 
-        if starts or current_doc is None:
+        for region in layout.get("regions", []):
+            text, matched = region_text(region, source_blocks)
+            for _, idx, _, _ in matched:
+                used_source.add(idx)
+            btype = map_type(region["label"], text)
+            bid = f"p{page_no:03d}-r{region['reading_order']:03d}"
+            confidence = region["score"]
+            if matched:
+                confidence = min(confidence, min(float(x[2].get("confidence", 1.0)) for x in matched))
+            row = {
+                "id": bid,
+                "document_id": None,
+                "page": page_no,
+                "type": btype,
+                "text": text,
+                "bbox": region["bbox"],
+                "confidence": confidence,
+                "layout_label": region["label"],
+                "layout_score": region["score"],
+                "source_block_ids": [f"p{page_no:03d}-s{x[1]:03d}" for x in matched],
+                "parent_block_id": current_heading,
+                "verification": normalized.get("verification", "unverified"),
+            }
+            if btype in ("title", "heading"):
+                row["parent_block_id"] = None
+                current_heading = bid
+            page_blocks.append(row)
+
+        # Preserve source text that did not overlap a detected region.
+        for idx, source_block in enumerate(source_blocks):
+            if idx in used_source or not source_block.get("text", "").strip():
+                continue
+            bid = f"p{page_no:03d}-s{idx:03d}"
+            text = source_block["text"]
+            page_blocks.append({
+                "id": bid,
+                "document_id": None,
+                "page": page_no,
+                "type": "qa" if QA_RE.match(text.strip()) else "narrative",
+                "text": text,
+                "bbox": source_block["bbox"],
+                "confidence": float(source_block.get("confidence", 1.0)) * 0.75,
+                "layout_label": "unmatched",
+                "layout_score": 0.0,
+                "source_block_ids": [bid],
+                "parent_block_id": current_heading,
+                "verification": normalized.get("verification", "unverified"),
+            })
+
+        page_blocks.sort(key=lambda b: (b["bbox"][1] if b["bbox"] else 0, b["bbox"][0] if b["bbox"] else 0))
+        role = choose_page_role(layout.get("regions", []), page_blocks)
+        title_candidates = [
+            b for b in page_blocks
+            if b["type"] == "title" and b["text"].strip() and b["layout_score"] >= 0.70
+        ]
+
+        starts_new = page_no == 1 or (role == "document_start" and bool(title_candidates))
+        if starts_new:
             if current_doc is not None:
-                current_doc["end_page"] = page_num - 1
-                current_doc["source_pages"] = list(range(current_doc["start_page"], page_num))
-                docs_rows.append(current_doc)
+                current_doc["end_page"] = page_no - 1
+                current_doc["source_pages"] = list(range(current_doc["start_page"], page_no))
+                documents.append(current_doc)
             doc_index += 1
+            title = title_candidates[0]["text"].replace("\n", " ").strip()[:160] if title_candidates else f"Document {doc_index}"
+            score = title_candidates[0]["layout_score"] if title_candidates else (1.0 if page_no == 1 else 0.5)
             current_doc = {
                 "id": f"doc-{doc_index:03d}",
-                "title": candidate_title or f"Document {doc_index}",
-                "start_page": page_num,
-                "end_page": page_num,
-                "boundary_confidence": boundary_conf,
-                "boundary_rule": boundary_rule,
-                "source_pages": [page_num],
+                "title": title,
+                "start_page": page_no,
+                "end_page": page_no,
+                "boundary_confidence": score,
+                "boundary_rule": "first_page" if page_no == 1 else "pp_doclayout_document_title",
+                "source_pages": [page_no],
             }
 
-        page_block_ids = []
-        page_title = None
-        for i, block in enumerate(blocks):
-            text = (block.get("text") or "").strip()
-            if not text:
-                continue
-            block_type, conf, rule = classify(text, i)
-            block_id = f"p{page_num:03d}-b{i:03d}"
-            if block_type == "title" and page_title is None:
-                page_title = text
-            row = {
-                "id": block_id,
-                "document_id": current_doc["id"],
-                "page": page_num,
-                "source_block_index": i,
-                "type": block_type,
-                "text": text,
-                "bbox": block.get("bbox"),
-                "confidence": min(float(block.get("confidence", 1.0)), conf),
-                "verification": page_data.get("verification", "unverified"),
-                "classification_rule": rule,
-            }
-            block_rows.append(row)
-            page_block_ids.append(block_id)
+        for b in page_blocks:
+            b["document_id"] = current_doc["id"]
+            blocks.append(b)
 
-        pages_rows.append({
-            "page": page_num,
+        pages.append({
+            "page": page_no,
             "document_id": current_doc["id"],
-            "title": page_title,
-            "block_ids": page_block_ids,
-            "source_verification": page_data.get("verification", "unverified"),
+            "page_role": role,
+            "block_ids": [b["id"] for b in page_blocks],
+            "layout_labels": [r["label"] for r in layout.get("regions", [])],
         })
 
     if current_doc is not None:
-        current_doc["end_page"] = manifest["page_count"]
-        current_doc["source_pages"] = list(range(current_doc["start_page"], manifest["page_count"] + 1))
-        docs_rows.append(current_doc)
+        current_doc["end_page"] = source["page_count"]
+        current_doc["source_pages"] = list(range(current_doc["start_page"], source["page_count"] + 1))
+        documents.append(current_doc)
 
-    dump_jsonl(out / "pages.jsonl", pages_rows)
-    dump_jsonl(out / "documents.jsonl", docs_rows)
-    dump_jsonl(out / "blocks.jsonl", block_rows)
+    dump_jsonl(out / "documents.jsonl", documents)
+    dump_jsonl(out / "pages.jsonl", pages)
+    dump_jsonl(out / "blocks.jsonl", blocks)
 
     binding = {
         "schema_version": SCHEMA_VERSION,
-        "ocr_fingerprint": fingerprint(case_dir),
-        "source_sha256": manifest["source_sha256"],
-        "files": {name: sha(out / name) for name in STRUCTURE_FILES},
+        "ingest_fingerprint": fingerprint(case_dir),
+        "layout_fingerprint": layout_fingerprint(case_dir / "layout"),
+        "source_sha256": source["source_sha256"],
+        "files": {name: sha(out / name) for name in FILES},
     }
     atomic(out / "structure_manifest.json", binding)
-    print(f"OK: {len(docs_rows)} documents, {len(pages_rows)} pages, {len(block_rows)} blocks")
+    print(f"OK: {len(documents)} documents, {len(pages)} pages, {len(blocks)} blocks")
 
 
 if __name__ == "__main__":

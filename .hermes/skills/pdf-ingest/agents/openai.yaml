@@ -1,0 +1,3 @@
+interface:
+  display_name: "PDF Ingest"
+  short_description: "Adaptive native-text/OCR PDF ingest with normalized coordinates"
